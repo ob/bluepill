@@ -18,33 +18,33 @@
 + (NSArray<BPXCTestFile *>*)testsFromAppBundle:(NSString *)appBundlePath
                              andTestBundlePath:(NSString *)testBundlePath
                             andUITargetAppPath:(NSString *)UITargetAppPath
-                                     withError:(NSError *__autoreleasing *)error {
+                                     withError:(NSError *__autoreleasing *)errPtr {
     if (testBundlePath == nil) {
         return [BPApp testsFromAppBundle:appBundlePath
                       andUITargetAppPath:UITargetAppPath
-                               withError:error];
+                               withError:errPtr];
     }
     NSMutableArray<BPXCTestFile *>* allTests = [[NSMutableArray alloc] init];
     BPXCTestFile *xcTestFile = [BPXCTestFile BPXCTestFileFromXCTestBundle:testBundlePath
                                                          andHostAppBundle:appBundlePath
                                                        andUITargetAppPath:UITargetAppPath
-                                                                withError:error];
+                                                                withError:errPtr];
     [allTests addObject:xcTestFile];
     return allTests;
 }
 
 + (NSArray<BPXCTestFile *>*)testsFromAppBundle:(NSString *)appBundlePath
                             andUITargetAppPath:(NSString *)UITargetAppPath
-                                     withError:(NSError *__autoreleasing *)error {
+                                     withError:(NSError *__autoreleasing *)errPtr {
     NSFileManager *fm = [NSFileManager defaultManager];
     BOOL isDir = NO;
     NSString *dirPath = [appBundlePath stringByAppendingPathComponent:@"Plugins"];
     if (![fm fileExistsAtPath:dirPath isDirectory:&isDir] || !isDir) {
-        BP_SET_ERROR(error, @"%s", strerror(errno));
+        BP_SET_ERROR(errPtr, @"%s", strerror(errno));
         return nil;
     }
-    NSArray *allFiles = [fm contentsOfDirectoryAtPath:dirPath error:error];
-    if (!allFiles && *error) {
+    NSArray *allFiles = [fm contentsOfDirectoryAtPath:dirPath error:errPtr];
+    if (!allFiles && *errPtr) {
         return nil;
     };
     NSMutableArray<BPXCTestFile *> *xcTestFiles = [[NSMutableArray alloc] init];
@@ -55,7 +55,7 @@
             BPXCTestFile *xcTestFile = [BPXCTestFile BPXCTestFileFromXCTestBundle:testBundlePath
                                                                  andHostAppBundle:appBundlePath
                                                                andUITargetAppPath:UITargetAppPath
-                                                                        withError:error];
+                                                                        withError:errPtr];
             if (!xcTestFile) return nil;
             [xcTestFiles addObject:xcTestFile];
         }
@@ -66,15 +66,19 @@
 + (NSArray <BPXCTestFile *>*)testsFromXCTestRunDict:(NSDictionary *)xcTestRunDict
                                    andXCTestRunPath:(NSString *)xcTestRunPath
                                        andXcodePath:(NSString *)xcodePath
-                                          withError:(NSError *__autoreleasing *)error {
+                                          withError:(NSError *__autoreleasing *)errPtr {
 
     NSMutableArray<BPXCTestFile *> *allTests = [[NSMutableArray alloc] init];
     NSUInteger errorCount = 0;
     for (NSString *key in xcTestRunDict) {
+        if ([key isEqualToString:@"__xctestrun_metadata__"]) {
+            // Xcode 10.1 introduced this in the xctestrun file format.
+            continue;
+        }
         BPXCTestFile *xcTestFile = [BPXCTestFile BPXCTestFileFromDictionary:[xcTestRunDict objectForKey:key]
                                                                withTestRoot:[xcTestRunPath stringByDeletingLastPathComponent]
                                                                andXcodePath:xcodePath
-                                                                   andError:error];
+                                                                   andError:errPtr];
         if (!xcTestFile) {
             [BPUtils printInfo:ERROR withString:@"Failed to read data for %@", key];
             errorCount++;
@@ -83,14 +87,14 @@
         [allTests addObject:xcTestFile];
     }
     if (errorCount) {
-        BP_SET_ERROR(error, @"Failed to load some test bundles");
+        BP_SET_ERROR(errPtr, @"Failed to load some test bundles");
         return nil;
     }
     return allTests;
 }
 
 + (instancetype)appWithConfig:(BPConfiguration *)config
-                    withError:(NSError *__autoreleasing *)error {
+                    withError:(NSError *__autoreleasing *)errPtr {
 
     BPApp *app = [[BPApp alloc] init];
     NSMutableArray<BPXCTestFile *> *allTests = [[NSMutableArray alloc] init];
@@ -101,7 +105,7 @@
         NSArray<BPXCTestFile *> *loadedTests = [BPApp testsFromXCTestRunDict:config.xcTestRunDict
                                                            andXCTestRunPath:config.xcTestRunPath
                                                                 andXcodePath:config.xcodePath
-                                                                   withError:error];
+                                                                   withError:errPtr];
         if (loadedTests == nil) {
             return nil;
         }
@@ -113,9 +117,9 @@
         [allTests addObjectsFromArray:[BPApp testsFromAppBundle:config.appBundlePath
                                               andTestBundlePath:config.testBundlePath
                                              andUITargetAppPath:config.testRunnerAppPath
-                                                      withError:error]];
+                                                      withError:errPtr]];
     } else {
-        BP_SET_ERROR(error, @"xctestrun file must be given, see usage.");
+        BP_SET_ERROR(errPtr, @"xctestrun file must be given, see usage.");
         return nil;
     }
 
@@ -124,7 +128,7 @@
             BPXCTestFile *testFile = [BPXCTestFile BPXCTestFileFromXCTestBundle:testBundle
                                                                andHostAppBundle:config.appBundlePath
                                                              andUITargetAppPath:config.testRunnerAppPath
-                                                                    withError:error];
+                                                                    withError:errPtr];
             [allTests addObject:testFile];
         }
     }
@@ -133,7 +137,7 @@
         for (NSString *testBundle in config.additionalUnitTestBundles) {
             BPXCTestFile *testFile = [BPXCTestFile BPXCTestFileFromXCTestBundle:testBundle
                                                                andHostAppBundle:config.testRunnerAppPath
-                                                                    withError:error];
+                                                                    withError:errPtr];
             [allTests addObject:testFile];
         }
     }

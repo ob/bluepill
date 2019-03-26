@@ -34,7 +34,7 @@ numprocs(void)
 {
     int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
     size_t len = 0;
-    
+
     if (sysctl(mib, 4, NULL, &len, NULL, 0)) {
         perror("Failed to call sysctl");
         return 0;
@@ -142,7 +142,7 @@ maxprocs(void)
     [env addEntriesFromDictionary:[[NSProcessInfo processInfo] environment]];
     [env setObject:[NSString stringWithFormat:@"%lu", number] forKey:@"_BP_NUM"];
     [task setEnvironment:env];
-    
+
     [task setTerminationHandler:^(NSTask * _Nonnull task) {
         [BPUtils printInfo:INFO withString:@"Simulator %lu (PID %u) to delete device %@ has finished with exit code %d.",
          number, [task processIdentifier], deviceID, [task terminationStatus]];
@@ -150,11 +150,11 @@ maxprocs(void)
     return task;
 }
 
-- (NSRunningApplication *)openSimulatorAppWithConfiguration:(BPConfiguration *)config andError:(NSError **)error {
+- (NSRunningApplication *)openSimulatorAppWithConfiguration:(BPConfiguration *)config andError:(NSError **)errPtr {
     NSURL *simulatorURL = [NSURL fileURLWithPath:
                            [NSString stringWithFormat:@"%@/Applications/Simulator.app/Contents/MacOS/Simulator",
                             config.xcodePath]];
-    
+
     NSWorkspaceLaunchOptions launchOptions = NSWorkspaceLaunchAsync |
                                              NSWorkspaceLaunchWithoutActivation |
                                              NSWorkspaceLaunchAndHide;
@@ -164,9 +164,9 @@ maxprocs(void)
                                  launchApplicationAtURL:simulatorURL
                                  options:launchOptions
                                  configuration:configuration
-                                 error:error];
+                                 error:errPtr];
     if (!app) {
-        [BPUtils printInfo:ERROR withString:@"Launch Simulator.app returned error: %@", [*error localizedDescription]];
+        [BPUtils printInfo:ERROR withString:@"Launch Simulator.app returned error: %@", [*errPtr localizedDescription]];
         return nil;
     }
     return app;
@@ -189,7 +189,7 @@ maxprocs(void)
                 withString:@"Lowering number of simulators from %lu to %lu because there aren't enough tests.",
                             numSims, bundles.count];
     }
-    if (self.config.cloneSimulator) {        
+    if (self.config.cloneSimulator) {
         self.testHostForSimUDID = [bpSimulator createSimulatorAndInstallAppWithBundles:xcTestFiles];
         if ([self.testHostForSimUDID count] == 0) {
             return 1;
@@ -297,7 +297,7 @@ maxprocs(void)
         [task launch];
         //fire & forget, DON'T WAIT
     }
-    
+
     [BPUtils printInfo:INFO withString:@"All simulators have finished."];
     if (self.config.cloneSimulator) {
         [BPUtils printInfo:INFO withString:@"Deleting template simulator.."];
@@ -314,11 +314,12 @@ maxprocs(void)
             [fm removeItemAtPath:outputPath error:nil];
         }
         [BPReportCollector collectReportsFromPath:self.config.outputDirectory onReportCollected:^(NSURL *fileUrl) {
-//            NSError *error;
-//            NSFileManager *fm = [NSFileManager new];
-//            [fm removeItemAtURL:fileUrl error:&error];
+              if (!self.config.keepIndividualTestReports) {
+                NSError *error;
+                [fm removeItemAtURL:fileUrl error:&error];
+              }
         } applyXQuery:nil withOutputAtPath:outputPath];
-        
+
         // This will output a file containing all testcases containing a <failure> but NOT with text indicating it was a timeout
         if (self.config.failureXmlOutput) {
             outputPath = [self.config.outputDirectory stringByAppendingPathComponent:@"FailureReport.xml"];
@@ -341,11 +342,11 @@ maxprocs(void)
 
 - (void)interrupt {
     if (self.nsTaskList == nil) return;
-    
+
     for (int i = 0; i < [self.nsTaskList count]; i++) {
         [((NSTask *)[self.nsTaskList objectAtIndex:i]) interrupt];
     }
-    
+
     [self.nsTaskList removeAllObjects];
 }
 

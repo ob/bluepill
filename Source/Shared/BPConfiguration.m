@@ -111,6 +111,8 @@ struct BPOptions {
         "Only list tests in bundle"},
     {'v', "verbose", BP_MASTER | BP_SLAVE, NO, NO, no_argument, "Off", BP_VALUE | BP_BOOL, "verboseLogging",
         "Enable verbose logging"},
+    {'k', "keep-individual-test-reports", BP_MASTER | BP_SLAVE, NO, NO, no_argument, "Off", BP_VALUE | BP_BOOL, "keepIndividualTestReports",
+        "Keep individual test reports, in addition to the aggregated final report"},
 
     // options without short-options
     {349, "additional-unit-xctests", BP_MASTER | BP_SLAVE, NO, NO, required_argument, NULL, BP_LIST | BP_PATH, "additionalUnitTestBundles",
@@ -123,8 +125,6 @@ struct BPOptions {
         "The maximum number of times to attempt to create a simulator before failing a test attempt"},
     {354, "max-sim-install-attempts", BP_MASTER | BP_SLAVE, NO, NO, required_argument, "2", BP_VALUE | BP_INTEGER, "maxInstallTries",
         "The maximum number of times to attempt to install the test app into a simulator before failing a test attempt"},
-    {355, "max-sim-launch-attempts", BP_MASTER | BP_SLAVE, NO, NO, required_argument, "2", BP_VALUE | BP_INTEGER, "maxLaunchTries",
-        "The maximum number of times to attempt to launch the test app in a simulator before failing a test attempt"},
     {356, "create-timeout", BP_MASTER | BP_SLAVE, NO, NO, required_argument, "300", BP_VALUE | BP_INTEGER, "createTimeout",
         "The maximum amount of time, in seconds, to wait before giving up on simulator creation"},
     {357, "launch-timeout", BP_MASTER | BP_SLAVE, NO, NO, required_argument, "300", BP_VALUE | BP_INTEGER, "launchTimeout",
@@ -166,7 +166,7 @@ static NSUUID *sessionID;
     return [self initWithConfigFile:nil forProgram:program withError:nil];
 }
 
-- (instancetype)initWithConfigFile:(NSString *)file forProgram:(BPProgram)program withError:(NSError **)err {
+- (instancetype)initWithConfigFile:(NSString *)file forProgram:(BPProgram)program withError:(NSError **)errPtr {
     self = [super init];
     if (program != BP_MASTER && program != BP_SLAVE) return nil;
     self.program = program;
@@ -186,7 +186,7 @@ static NSUUID *sessionID;
         // Since we're reinitializing, we haven't seen any options
         BPOptions[i].seen = NO;
     }
-    if (!file || [self loadConfigFile:file withError:err]) {
+    if (!file || [self loadConfigFile:file withError:errPtr]) {
         return self;
     }
     return nil;
@@ -435,22 +435,22 @@ static NSUUID *sessionID;
     exit(rc);
 }
 
-- (BOOL)loadConfigFile:(NSString *)file withError:(NSError **)error{
+- (BOOL)loadConfigFile:(NSString *)file withError:(NSError **)errPtr{
     NSData *data = [NSData dataWithContentsOfFile:file
                                           options:NSDataReadingMappedIfSafe
-                                            error:error];
+                                            error:errPtr];
     if (!data) return FALSE;
 
     NSDictionary *configDict = [NSJSONSerialization JSONObjectWithData:data
                                                                options:kNilOptions
-                                                                 error:error];
+                                                                 error:errPtr];
     if (!configDict) return FALSE;
     for (NSString *key in configDict) {
         id value = [configDict objectForKey:key];
         for (int i = 0; BPOptions[i].name; i++) {
             if (!strcmp([key UTF8String], BPOptions[i].name)) {
                 if (BPOptions[i].kind & BP_LIST && ![value isKindOfClass:[NSArray class]]) {
-                    BP_SET_ERROR(error, @"Expected type %@ for key '%@', got %@. Parsing failed.",
+                    BP_SET_ERROR(errPtr, @"Expected type %@ for key '%@', got %@. Parsing failed.",
                                           [NSArray className], key, [value className]);
                     return NO;
                 }
@@ -495,7 +495,7 @@ static NSUUID *sessionID;
     return YES;
 }
 
-- (BOOL)processOptionsWithError:(NSError **)err {
+- (BOOL)processOptionsWithError:(NSError **)errPtr {
     // look for a config file first
     BOOL loadedConfig = FALSE;
     for (NSMutableArray *pair in self.bpCmdLineArgs) {
@@ -503,13 +503,13 @@ static NSUUID *sessionID;
         NSString *optarg = pair[1];
         if ([op isEqualToNumber:[NSNumber numberWithInt:'c']]) {
             if (loadedConfig) {
-                BP_SET_ERROR(err, @"Only one configuration file (-c) allowed.");
+                BP_SET_ERROR(errPtr, @"Only one configuration file (-c) allowed.");
                 return FALSE;
             }
             // load the config file
             NSError *error;
             if (![self loadConfigFile:optarg withError:&error]) {
-                BP_SET_ERROR(err, @"Could not load configuration from %@\n%@", optarg, [error localizedDescription]);
+                BP_SET_ERROR(errPtr, @"Could not load configuration from %@\n%@", optarg, [error localizedDescription]);
                 return FALSE;
             }
             loadedConfig = TRUE;
@@ -537,7 +537,7 @@ static NSUUID *sessionID;
         [errors addObject:@"Missing required option: -t/--test-bundle-path"];
     }
     if (errors.count > 0) {
-        BP_SET_ERROR(err, [errors componentsJoinedByString:@"\n\t"]);
+        BP_SET_ERROR(errPtr, [errors componentsJoinedByString:@"\n\t"]);
         return FALSE;
     }
     if (printConfig) {
@@ -549,44 +549,44 @@ static NSUUID *sessionID;
 
 // Validate that the xctestrun file used is in a valid format and fill in the parsed dictionary.
 // See `man xcodebuild.xctestrun` for info about the file.
-- (BOOL)parseXcTestRunFile:(NSString *)path withError:(NSError *__autoreleasing *)error {
+- (BOOL)parseXcTestRunFile:(NSString *)path withError:(NSError *__autoreleasing *)errPtr {
     BOOL isdir;
     if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isdir] || isdir) {
-        BP_SET_ERROR(error, @"Failed to find file %@", path);
+        BP_SET_ERROR(errPtr, @"Failed to find file %@", path);
         return NO;
     }
     NSData *plistData = [[NSMutableData alloc] initWithContentsOfFile:path];
     if (plistData == nil) {
-        BP_SET_ERROR(error, @"Failed to open file %@", path);
+        BP_SET_ERROR(errPtr, @"Failed to open file %@", path);
         return NO;
     }
     NSMutableDictionary* plist = [NSPropertyListSerialization propertyListWithData:plistData
                                                                            options: NSPropertyListImmutable
                                                                             format:NULL
-                                                                             error:error];
+                                                                             error:errPtr];
     if (plist == nil) {
-        BP_SET_ERROR(error, @"Could not parse plist format from %@: %@", path, [*error localizedDescription]);
+        BP_SET_ERROR(errPtr, @"Could not parse plist format from %@: %@", path, [*errPtr localizedDescription]);
         return NO;
     }
     self.xcTestRunDict = plist;
     return YES;
 }
 
-- (BOOL)parseXcSchemeFile:(NSString *)schemePath withError:(NSError *__autoreleasing *)error {
+- (BOOL)parseXcSchemeFile:(NSString *)schemePath withError:(NSError *__autoreleasing *)errPtr {
     NSMutableArray<NSString *> *commandLineArgs  = [NSMutableArray new];
     NSMutableDictionary<NSString *, NSString *> *environmentVariables = [NSMutableDictionary new];
     
     NSData *xmlData = [[NSMutableData alloc] initWithContentsOfFile:schemePath];
     if (xmlData) {
-        NSXMLDocument *document = [[NSXMLDocument alloc] initWithData:xmlData options:0 error:error];
+        NSXMLDocument *document = [[NSXMLDocument alloc] initWithData:xmlData options:0 error:errPtr];
         if (!document) {
-            BP_SET_ERROR(error, @"Failed to parse scheme file at %@: %@", schemePath, [*error localizedDescription]);
+            BP_SET_ERROR(errPtr, @"Failed to parse scheme file at %@: %@", schemePath, [*errPtr localizedDescription]);
             return NO;
         }
-        NSArray *argsNodes = [document nodesForXPath:[NSString stringWithFormat:@"//%@//CommandLineArgument", @"LaunchAction"] error:error];
+        NSArray *argsNodes = [document nodesForXPath:[NSString stringWithFormat:@"//%@//CommandLineArgument", @"LaunchAction"] error:errPtr];
         NSMutableArray *envNodes = [[NSMutableArray alloc] init];
-        [envNodes addObjectsFromArray:[document nodesForXPath:[NSString stringWithFormat:@"//%@//EnvironmentVariable", @"LaunchAction"] error:error]];
-        [envNodes addObjectsFromArray:[document nodesForXPath:[NSString stringWithFormat:@"//%@//EnvironmentVariable", @"TestAction"] error:error]];
+        [envNodes addObjectsFromArray:[document nodesForXPath:[NSString stringWithFormat:@"//%@//EnvironmentVariable", @"LaunchAction"] error:errPtr]];
+        [envNodes addObjectsFromArray:[document nodesForXPath:[NSString stringWithFormat:@"//%@//EnvironmentVariable", @"TestAction"] error:errPtr]];
         for (NSXMLElement *node in argsNodes) {
             NSString *argument = [[node attributeForName:@"argument"] stringValue];
             if (![[[node attributeForName:@"isEnabled"] stringValue] boolValue]) {
@@ -616,19 +616,22 @@ static NSUUID *sessionID;
 
 
 
-- (BOOL)validateConfigWithError:(NSError *__autoreleasing *)err {
+- (BOOL)validateConfigWithError:(NSError *__autoreleasing *)errPtr {
     BOOL isdir;
+
+    [BPUtils enableDebugOutput:self.verboseLogging];
+
     if (!self.xcodePath) {
         self.xcodePath = [BPUtils runShell:@"/usr/bin/xcode-select -print-path"];
     }
 
     if (!self.xcodePath || [self.xcodePath isEqualToString:@""]) {
-        BP_SET_ERROR(err, @"Could not set Xcode path!");
+        BP_SET_ERROR(errPtr, @"Could not set Xcode path!");
         return NO;
     }
 
     if (![[NSFileManager defaultManager] fileExistsAtPath:self.xcodePath isDirectory:&isdir] || !isdir) {
-        BP_SET_ERROR(err, @"Could not find Xcode at %@", self.xcodePath);
+        BP_SET_ERROR(errPtr, @"Could not find Xcode at %@", self.xcodePath);
         return NO;
     }
     
@@ -636,7 +639,7 @@ static NSUUID *sessionID;
     NSString *xcodeVersion = [BPUtils runShell:@"xcodebuild -version"];
     [BPUtils printInfo:DEBUGINFO withString:@"xcode build version: %@", xcodeVersion];
     if ([xcodeVersion rangeOfString:@BP_DEFAULT_XCODE_VERSION].location == NSNotFound) {
-        BP_SET_ERROR(err, @"ERROR: Invalid Xcode version:\n%s;\nOnly %s is supported\n", [xcodeVersion UTF8String], BP_DEFAULT_XCODE_VERSION);
+        BP_SET_ERROR(errPtr, @"ERROR: Invalid Xcode version:\n%s;\nOnly %s is supported\n", [xcodeVersion UTF8String], BP_DEFAULT_XCODE_VERSION);
         return NO;
     }
     
@@ -644,7 +647,7 @@ static NSUUID *sessionID;
     //Senario to prevent: Bluepill is compiled with Xcode 8, but runs with host installed with Xcode 9
     //Only compare major and minor version version Exg. 9.1 == 9.1
     if (![[[BPUtils getXcodeRuntimeVersion] substringToIndex:4] isEqualToString:@BP_DEFAULT_XCODE_VERSION]) {
-        BP_SET_ERROR(err, @"ERROR: Bluepill runtime version %s and compile time version %s are mismatched\n",
+        BP_SET_ERROR(errPtr, @"ERROR: Bluepill runtime version %s and compile time version %s are mismatched\n",
                      [[[BPUtils getXcodeRuntimeVersion] substringToIndex:4] UTF8String], [@BP_DEFAULT_XCODE_VERSION UTF8String]);
         return NO;
     }
@@ -653,36 +656,36 @@ static NSUUID *sessionID;
         return YES;
     }
 
-    if (self.xcTestRunPath && ![self parseXcTestRunFile:self.xcTestRunPath withError:err]) {
+    if (self.xcTestRunPath && ![self parseXcTestRunFile:self.xcTestRunPath withError:errPtr]) {
             return NO;
     }
 
     if (!self.appBundlePath && !self.xcTestRunDict) {
-        BP_SET_ERROR(err, @"No app bundle provided.");
+        BP_SET_ERROR(errPtr, @"No app bundle provided.");
         return NO;
     }
 
     if (self.appBundlePath && (![[NSFileManager defaultManager] fileExistsAtPath: self.appBundlePath isDirectory:&isdir] || !isdir)) {
-        BP_SET_ERROR(err, @"%@ not found.", self.appBundlePath);
+        BP_SET_ERROR(errPtr, @"%@ not found.", self.appBundlePath);
         return NO;
     }
     NSString *path = [self.appBundlePath stringByAppendingPathComponent:@"Info.plist"];
     NSDictionary *dic = [NSDictionary dictionaryWithContentsOfFile:path];
     
     if (!dic) {
-        BP_SET_ERROR(err, @"Could not read %@, perhaps you forgot to run xcodebuild build-for-testing?", path);
+        BP_SET_ERROR(errPtr, @"Could not read %@, perhaps you forgot to run xcodebuild build-for-testing?", path);
     }
 
     NSString *platform = [dic objectForKey:@"DTPlatformName"];
     if (platform && ![platform isEqualToString:@"iphonesimulator"]) {
-        BP_SET_ERROR(err, @"Wrong platform in %@. Expected 'iphonesimulator', found '%@'", self.appBundlePath, platform);
+        BP_SET_ERROR(errPtr, @"Wrong platform in %@. Expected 'iphonesimulator', found '%@'", self.appBundlePath, platform);
         return NO;
     }
 
     if (self.outputDirectory) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:self.outputDirectory isDirectory:&isdir]) {
             if (!isdir) {
-                BP_SET_ERROR(err, @"%@ is not a directory.", self.outputDirectory);
+                BP_SET_ERROR(errPtr, @"%@ is not a directory.", self.outputDirectory);
                 return NO;
             }
         } else {
@@ -690,7 +693,7 @@ static NSUUID *sessionID;
             if (![[NSFileManager defaultManager] createDirectoryAtPath:self.outputDirectory
                                            withIntermediateDirectories:YES
                                                             attributes:nil
-                                                                 error:err]) {
+                                                                 error:errPtr]) {
                 return NO;
             }
         }
@@ -703,7 +706,7 @@ static NSUUID *sessionID;
     if (self.screenshotsDirectory) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:self.screenshotsDirectory isDirectory:&isdir]) {
             if (!isdir) {
-                BP_SET_ERROR(err, @"%@ is not a directory.", self.screenshotsDirectory);
+                BP_SET_ERROR(errPtr, @"%@ is not a directory.", self.screenshotsDirectory);
                 return NO;
             }
         } else {
@@ -711,7 +714,7 @@ static NSUUID *sessionID;
             if (![[NSFileManager defaultManager] createDirectoryAtPath:self.screenshotsDirectory
                                            withIntermediateDirectories:YES
                                                             attributes:nil
-                                                                 error:err]) {
+                                                                 error:errPtr]) {
                 return NO;
             }
         }
@@ -720,11 +723,11 @@ static NSUUID *sessionID;
     if (self.simulatorPreferencesFile) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:self.simulatorPreferencesFile isDirectory:&isdir]) {
             if (isdir) {
-                BP_SET_ERROR(err, @"%@ is a directory.", self.simulatorPreferencesFile);
+                BP_SET_ERROR(errPtr, @"%@ is a directory.", self.simulatorPreferencesFile);
                 return NO;
             }
         } else {
-            BP_SET_ERROR(err, @"%@ doesn't exist", self.simulatorPreferencesFile);
+            BP_SET_ERROR(errPtr, @"%@ doesn't exist", self.simulatorPreferencesFile);
             return NO;
         }
     }
@@ -732,17 +735,17 @@ static NSUUID *sessionID;
     if (self.scriptFilePath) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:self.scriptFilePath isDirectory:&isdir]) {
             if (isdir) {
-                BP_SET_ERROR(err, @"%@ is a directory.", self.scriptFilePath);
+                BP_SET_ERROR(errPtr, @"%@ is a directory.", self.scriptFilePath);
                 return NO;
             }
 
             if (![[NSFileManager defaultManager] isExecutableFileAtPath:self.scriptFilePath]) {
-                BP_SET_ERROR(err, @"%@ is not executable.", self.scriptFilePath);
+                BP_SET_ERROR(errPtr, @"%@ is not executable.", self.scriptFilePath);
                 return NO;
             }
 
         } else {
-            BP_SET_ERROR(err, @"%@ doesn't exist", self.scriptFilePath);
+            BP_SET_ERROR(errPtr, @"%@ doesn't exist", self.scriptFilePath);
             return NO;
         }
     }
@@ -750,19 +753,19 @@ static NSUUID *sessionID;
     if (!self.xcTestRunDict && self.schemePath) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:self.schemePath isDirectory:&isdir]) {
             if (isdir) {
-                BP_SET_ERROR(err, @"%@ is a directory", self.schemePath);
+                BP_SET_ERROR(errPtr, @"%@ is a directory", self.schemePath);
                 return NO;
             }
         } else {
-            BP_SET_ERROR(err, @"%@ doesn't exist", self.schemePath);
+            BP_SET_ERROR(errPtr, @"%@ doesn't exist", self.schemePath);
             return NO;
         }
-        if (![self parseXcSchemeFile:self.schemePath withError:err]) {
+        if (![self parseXcSchemeFile:self.schemePath withError:errPtr]) {
             return NO;
         }
         [BPUtils printInfo:WARNING withString:@"The --scheme-path option is broken and is being deprecated. Please switch to using --xctestrun-path."];
     } else if (!_xcTestRunDict) {
-        BP_SET_ERROR(err, @"No scheme provided.");
+        BP_SET_ERROR(errPtr, @"No scheme provided.");
         return NO;
     }
 
@@ -782,7 +785,7 @@ static NSUUID *sessionID;
     }
 
     if (![self.deviceType isKindOfClass:[NSString class]]) {
-        BP_SET_ERROR(err, @"device must be a string like '%s'", BP_DEFAULT_DEVICE_TYPE);
+        BP_SET_ERROR(errPtr, @"device must be a string like '%s'", BP_DEFAULT_DEVICE_TYPE);
         return NO;
     }
 
@@ -791,16 +794,16 @@ static NSUUID *sessionID;
     }
 
     if (![self.runtime isKindOfClass:[NSString class]]) {
-        BP_SET_ERROR(err, @"runtime must be a string like '%s'.", BP_DEFAULT_RUNTIME);
+        BP_SET_ERROR(errPtr, @"runtime must be a string like '%s'.", BP_DEFAULT_RUNTIME);
         return NO;
     }
 
 
     // Validate we were passed a valid device and runtime
     self.simDeviceType = nil;
-    SimServiceContext *sc = [SimServiceContext sharedServiceContextForDeveloperDir:self.xcodePath error: err];
+    SimServiceContext *sc = [SimServiceContext sharedServiceContextForDeveloperDir:self.xcodePath error: errPtr];
     if (!sc) {
-        [BPUtils printInfo:ERROR withString:@"Failed to initialize SimServiceContext: %@", *err];
+        [BPUtils printInfo:ERROR withString:@"Failed to initialize SimServiceContext: %@", *errPtr];
         [BPUtils printInfo:ERROR withString:@"self.xcodePath is: %@", self.xcodePath];
         return NO;
     }
@@ -813,7 +816,7 @@ static NSUUID *sessionID;
     }
 
     if (!self.simDeviceType) {
-        BP_SET_ERROR(err, @"%@ is not a valid device type.\n"
+        BP_SET_ERROR(errPtr, @"%@ is not a valid device type.\n"
                      "Use `xcrun simctl list devicetypes` for a list of valid devices.",
                      self.deviceType);
         return NO;
@@ -829,7 +832,7 @@ static NSUUID *sessionID;
     }
 
     if (!self.simRuntime) {
-        BP_SET_ERROR(err, @"%@ is not a valid runtime.\n"
+        BP_SET_ERROR(errPtr, @"%@ is not a valid runtime.\n"
                      "Use `xcrun simctl list runtimes` for a list of valid runtimes.",
                      self.runtime);
         return NO;
