@@ -1,9 +1,10 @@
 {
-    "app": ".",
+    "app": "/Users/khu/Library/Developer/Xcode/DerivedData/voyager-frhgmrtfxqiflycndwcgfpqkbhdy/Build/Products/Debug-iphonesimulator/LinkedIn.app",
     "no-split": [
                  "VoyagerTests"
                  ],
     "error-retries": 0,
+    "num-sims": 2,
     "test": "/tmp",
     "output-dir": "/tmp/simulator",
     "test-bundle-path": "/usr/bin",

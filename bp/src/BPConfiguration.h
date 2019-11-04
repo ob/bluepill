@@ -138,6 +138,15 @@ typedef NS_ENUM(NSInteger, BPProgram) {
  */
 - (BOOL)processOptionsWithError:(NSError **)errPtr;
 
+/*!
+ Validates and fills in simDeviceType and simRunTime based on default values if corresponding input config are missing
+
+ @param errPtr The error message in case of invalid input or failure to fill-in
+
+ @return True if the configs are valid and/or values are filled-in. False otherwise.
+ */
+- (BOOL)fillSimDeviceTypeAndRuntimeWithError:(NSError **)errPtr;
+
 /**
  Validate that the current configuration would work with Bluepill.
  
