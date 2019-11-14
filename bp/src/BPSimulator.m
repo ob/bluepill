@@ -76,7 +76,7 @@
             [BPUtils printInfo:ERROR withString:@"Boot simulator failed with error: %@", [error localizedDescription]];
             return nil;
         }
-        simulatorUDIDString = [self installApplicationWithHost:self.config.appBundlePath withDeviceSet:deviceSet withSimDevice:simDevice withError:&error];
+        simulatorUDIDString = [self installApplication:self.config.appBundlePath withDeviceSet:deviceSet withSimDevice:simDevice withError:&error];
         if (!simulatorUDIDString || error) {
             [BPUtils printInfo:ERROR withString:@"Create simulator and install application failed with error: %@", error];
             return nil;
@@ -98,11 +98,11 @@
             if (!simulatorUDIDString) {
                 SimDevice *simDevice = [self createSimTemplateWithDeviceSet:deviceSet errPtr:&error];
                 self.simDevices[simDevice.UDID.UUIDString] = simDevice;
-                simulatorUDIDString = [self installApplicationWithHost:self.config.appBundlePath withDeviceSet:deviceSet withSimDevice:simDevice withError:&error];
+                simulatorUDIDString = [self installApplication:self.config.appBundlePath withDeviceSet:deviceSet withSimDevice:simDevice withError:&error];
                 self.testHostSimTemplates[self.config.appBundlePath] = simulatorUDIDString;
             }
 
-            simulatorUDIDString = [self installApplicationWithHost:appPath withDeviceSet:deviceSet withSimDevice:nil withError:&error];
+            simulatorUDIDString = [self installApplication:appPath withDeviceSet:deviceSet withSimDevice:nil withError:&error];
             if (!simulatorUDIDString || error) {
                 [BPUtils printInfo:ERROR withString:@"Created simulator template and install applicationn failed with error: %@", error];
                 return FALSE;
@@ -134,18 +134,18 @@
     return simDevice;
 }
 
-- (NSString *)installApplicationWithHost:(NSString *)testHost withDeviceSet:(SimDeviceSet *)deviceSet withSimDevice:(SimDevice *)simDevice withError:(NSError *__autoreleasing *)errPtr {
+- (NSString *)installApplication:(NSString *)app withDeviceSet:(SimDeviceSet *)deviceSet withSimDevice:(SimDevice *)simDevice withError:(NSError *__autoreleasing *)errPtr {
     // Add photos and videos to the simulator.
     [self addPhotosToSimulator];
     [self addVideosToSimulator];
-    NSString *hostBundleId = [SimulatorHelper bundleIdForPath:testHost];
+    NSString *hostBundleId = [SimulatorHelper bundleIdForPath:app];
     if (!hostBundleId) {
-        [BPUtils printInfo:ERROR withString:@"Could not find test bundle id for %@", testHost];
+        [BPUtils printInfo:ERROR withString:@"Could not find test bundle id for %@", app];
         return nil;
     }
     // Install the host application
     NSError *installError = nil;
-    bool installed = [simDevice installApplication:[NSURL fileURLWithPath:testHost]
+    bool installed = [simDevice installApplication:[NSURL fileURLWithPath:app]
                                        withOptions:@{kCFBundleIdentifier: hostBundleId}
                                              error:&installError];
     if (!installed) {
