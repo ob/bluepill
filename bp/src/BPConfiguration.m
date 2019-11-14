@@ -94,7 +94,7 @@ struct BPOptions {
         "Paths to the images to be uploaded."},
 
     // options with no argument
-    {'L', "clone-simulator", BP_MASTER | BP_SLAVE, NO, NO, no_argument, "On", BP_VALUE | BP_BOOL , "cloneSimulator",
+    {'L', "clone-simulator", BP_MASTER | BP_SLAVE, NO, NO, no_argument, "On", BP_VALUE | BP_BOOL , NULL,
         "[Deprecated] This config is deprecated and the clone-simulator feature is always ON."},
     {'H', "headless", BP_MASTER | BP_SLAVE, NO, NO, no_argument, "Off", BP_VALUE | BP_BOOL , "headlessMode",
         "Run in headless mode (no GUI)."},
@@ -210,6 +210,9 @@ static NSUUID *sessionID;
     assert(bpo);
     NSString *value = [NSString stringWithUTF8String:arg];
     assert(value);
+
+    // if bpo->property is NULL, this has been deprecated
+    if (bpo->property == NULL) return;
 
     // If the value is of type BP_PATH, we append the CWD if the path is relative path
     if (bpo->kind & BP_PATH) {
