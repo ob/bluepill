@@ -2,120 +2,108 @@
 
 ![](https://github.com/linkedin/bluepill/workflows/master/badge.svg)
 
+# Background
+
 ## iOS Simulator Architecture
 
-- App (builds with) -> (Xcode/Bazel) -> `X.app` (packaged into an IPA, an archive of the app or "Bundle")
-- iPhones have ARM processors while Macs have `x86_64` (pre M1 at least)
-- Compilation -> Architecture specific binary (or app binary)
+The iOS Simulator for macOS is part of Xcode. It is located at `/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app`, which if you inspect using `otool -L`, you'll see is linked with `CoreSimulator.framework`.
 
-## Bluepill Build
-- `bluepill.sh` builds Bluepill in CI (It has a sample app)
-- Technically the script builds Bluepill, the sample app and runs the tests
-- `BPSampleApp.app` is the "bundle", an x86_64 bundle but iPhone needs an ARM executable
-	- "Fat binary" will have both
-- Side note: iOS is a variant of MacOS and Android ships a VM with a Linux based Android kernel
-- Originally Apple Emulators translated ARM -> `x86_64` but that was very slow!
-	- Helped test iOS apps in Mac by giving you an `x86_64` executable
-- Now they compile all frameworks for `x86_64` and give you a sandbox in which you can build a native binary
-	- It's faster to get an exectuable to test this way
+There are three ways to use Simulators in macOS:
 
+1. Open the `Simulator.app` GUI application (either via Xcode or standalone).
+2. Through a command line interface: `xcrun simctl`.
+3. By linking directly to the `CoreSimulator.framework` and using the API.
 
-## More Wisdom from Oscar
-- `xcrun simctl boot` will boot the simulator (Alternatively run Simulator.App in /Applications/Xcode.App)
-- `ps axuw | grep 'launchd_sim'` -> This is the `launchd` process running inside the Simulator
-	- Since the Simulator isn't a VM (like Android) and shares the same Kernel as the underlying Mac OS, it's possible to inspect the processes running inside the simulator
-	- `ps axiw | grep 'CoreSimulator'`
-- `xcrun simctl install .... BPSampleApp.app`
-- Kernel runs with special persmissions (Ring 0) that user programs aren't privy to
-	- Copy of iOS runs in user space of MacOS Kernel
-- The VM model: Multiple Kernels that share the same processor
-	- CPU -> Kernel1 (OS1)/Kernel2 (OS2)/Kernel3 (OS2)
-- `otool -L MacOS/Simulator`
-	- Inspect Frameworks -> /Library/Developer/PrivateFrameworks/CoreSimulator..
-	- Bluepill links with PrivateFrameworks (like simctl)
-- All functionality is provided as a framework. Simluator UI uses this library and so does Bluepill
-- file CoreSimulator
-	- Shows you a binary with 2 architectures for M1 compatibility
-	- CoreSimulator.framework/Versions/A
-		- Poke around to use the framework directly in Bluepill
+Bluepill uses the third approach. A handy way of looking at the methods in `CoreSimulator.framework` is by running `nm` on the binary:
 
-## iOS Apps Test Classes
+```
+❯ nm /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/CoreSimulator | head
+000000000000f94d t +[NSArray(SimPasteboardItem) blacklistedTypes]
+000000000007de0b t +[SimAudioHostRouteDescriptorState defaultAudioDescriptorStateWithPowerState:guestDataPath:]
+000000000004b872 t +[SimDevice _axResponseFromXPCMessage:]
+000000000004b6b4 t +[SimDevice _xpcMessageWithAXRequest:]
+0000000000029524 t +[SimDevice createDeviceWithName:deviceSet:deviceType:runtime:initialDataPath:]
+000000000002a6e9 t +[SimDevice isValidState:]
+000000000002a513 t +[SimDevice simDevice:UDID:deviceTypeIdentifier:runtimeIdentifier:runtimePolicy:runtimeSpecifier:state:deviceSet:]
+0000000000029b2d t +[SimDevice simDeviceAtPath:deviceSet:]
+000000000002d15f t +[SimDevice supportsFeature:deviceType:runtime:]
+000000000006ab8a t +[SimDeviceBootInfo supportsSecureCoding]
+```
+
+The iOS Simulator as a user process in macOS (that is, it uses the same macOS kernel). This means you can inspect the processes running inside the simulator by running common utilities like `ps` (e.g. look for `launchd_sim` to find LaunchPad running inside the Simulator).
+
+## Testing iOS Applications
+
+There are two types of tests you can write for iOS applications:
+
 - UI Tests
 	- Tests your app's UI
 	- Uses accessibility API of iOS
-	- Stuff like asserts about things being on screen
+	- Stuff like asserts about things being on screen and being visible
 - Unit Tests
-	- Non UI assertions and these things run _very_ differently
+	- Non UI assertions
 
-## How we rely on XCTest Framework
-`XCTest` is a _Plugin_
-```
-	bluepill/Build ... /BPSampleApp.app
-	tree Base.lproj
-	tree Frameworks
+Both of these tests use Apple's `XCTest.framework`, but they are run in different ways. When you run Unit Tests, Xcode uses code injection via the dynamic loader (See `man dyld`) to set `DYLD_INSERT_LIBRARIES` and load an injection dylib (typically created by Xcode when building an app in debug mode and placed inside the app's bundle at `libXCTestBundleInject.dylib`, and if your application has Swift code you'll also see `libXCTestSwiftSupport.dylib`).
 
-	XCTest.Framework
-	tree Plugins (Used for writing Plugins which is runtime code for extra functionality)
+Your tests are compiled as Plugins to your App; that is, in the `Plugins` directory inside your app's bundle, you'll find all the `*.xctest` bundles for all of your tests. The XCTest injection dylibs responsibility is to prevent your application from running its own `main()` and instead load all the `*.xctest` bundles from the `Plugins` directory and execute the tests.
+
+When you run UI Tests, a slightly different mechanism is used. Xcode creates a _runner_ application typically named the same as your app but with `UITests-Runner` appended. For example, for `BPSampleApp.app` Xcode will create `BPSampleAppUITests-Runner.app`. This runner app's responsibility is to launch your app and observe it using the Accessibility Framework for UI Testing.
+
+Xcode encodes all the information on how to run tests in an `.xctestrun` file, a PLIST format file (typically XML) with information about how to run the tests. If you build Bluepill's sample app, you can see the information in the generated `BPSampleApp_iphonesimulator14.4-x86_64.xctestrun` by running `plutil -p` on it:
+
 ```
+❯ plutil -p ./build/Build/Products/BPSampleApp_iphonesimulator14.4-x86_64.xctestrun | head
+{
+  "__xctestrun_metadata__" => {
+    "FormatVersion" => 1
+  }
+  "BPAppNegativeTests" => {
+    "BlueprintName" => "BPAppNegativeTests"
+    "BundleIdentifiersForCrashReportEmphasis" => [
+      0 => "LI.BPSampleAppHangingTests"
+      1 => "LI.BPAppNegativeTests"
+      2 => "LI.BPSampleAppFatalErrorTests"
+```
+
+## Building Bluepill
+
+### Using Xcode
+
+- Open `Bluepill.xcworkspace` and you should see three projects:
+  - `BPSampleApp`, which is an iOS application that demonstrates many of the common problems found while testing iOS applications: flaky tests, tests that crash, tests that timeout, etc. It is used for testing Bluepill itself.
+  - `bluepill` corresponds to the `bluepill` binary (a.k.a. `BLUEPILL_BINARY`) that is responsible for test packing, final reporting and keeping track of the many `bp` processes that are tied each to a single simulator run.
+  - `bp` which corresponds to the `bp` binary which is the main driver for testing in a single Simulator.
+
+### Using the Terminal
+
+- Run [`scripts/bluepill.sh build`](scripts/bluepill.sh) to build Bluepill (is what we use in CI). It'll leave the built artifacts in the `build` directory.
+
+You can take a look at [`.github/workflows/master.yml`](.github/workflows/master.yml) to see how we call it in CI.
+
 
 ## How Bluepill runs the tests
-`BPSampleTests.xctest` is a Bundle
-	- Executable
-	- Frameworks
-	- CodeSignature
-	- Info.plist (`plutil -p Info.plist`)
 
-- `FBundleIdentifier` -> Handle that iOS is using for interaction with the App
-- App loads the Plugin (`main -> loadPlugin`)
-- App binary dynamically links to `.dylib` files using the dynamic loader
-	- Dynamic loader maps a `.dylib` hook to its location in memory (Part of OS funcitonality)
-	- `man dyld` (See `DYLD_INSERT_LIBRARIES` option which is what we use in Bluepill)
-	- The _trampoline_ code to do this is in `libSystem.B.dylib` (part of the kernel space)
-- `otool --help`
-	- `otool -L /bin/ls`
-	- Gives OS a memory map telling it where to load the libraries in app code
-- Dynamic Loader can inject libraries *before* app loads its dynamic libraries
-	- `DYLD_INSERT_LIBRARIES`
-	- So `libXCTestBundleInject.dylib` gets injected before App runs
-- Loads `XCTestFramework`, discover tests (Unit Testing) and runs them
-
-
-## UI Testing
-- Xcode generates `<Appname>UITestsRunner.App`
-- Load Runner App that runs your application in a Leader/Follower model
-- UI Automation is involved here.. and in comes Bluepill
-
-```
-tree BPSamepleApp/Plugins
-		 ...xctest1
-		 ...xctest2
-```
-- Hydra ran these tests serially
-- However if we had X tests and X simulators running in _parallel_, things would be a lot quicker!
-- Interaction with PrivateFrameworks is hacky
+Bluepill mimics the way Xcode launches tests by calling `CoreSimulator.framework` and `XCTest.framework` APIs and setting up environment variables to the dynamic loader in the same way as Xcode.
 
 ## Bluepill High Level Architecture
 ![](doc/img/architecture.png)
 
-- `BLUEPILL_BINARY` is a command line application
-	- `bluepill/main.m`
-	- Starts with the most important task of a Matrix-style opening sequence ;)
-	- `BPConfiguration.h` -> App args/settings processor which accepts command line or JSON arguments and differentiates `BP_BINARY` and `BLUEPILL_BINARY` arguments
-	- Create `BP_BINARY` processes to run simulators
-	- Monitor Simulators for failure
-	- Aggregate individual test results into a unified test result
-- `BP_BINARY` is designed to run 1 simulator
-	- `bp/src/main.m`
-- If a single `BP_BINARY` instance crashes, then `BLUEPILL_BINARY` creates another one and picks up where the previous one left off, thus mitigating risk of data loss.
-	- `BLUEPILL_BINARY` doesn't interact with the simulators directly for this very purpose (although this is technically untrue as of today)
-	- `BLUEPILL_BINARY` eventually needed knowledge of the simulators and we ended up breaking original design.
+- `bluepill` (aka `BLUEPILL_BINARY`) is a command line application
+	- [`bluepill/main.m`](bluepill/main.m) is the entry point
+	- Starts with the most important task of a Matrix-style opening sequence (try `bluepill --matrix` and see)
+	- [`BPConfiguration.m`](bp/src/BPConfiguration.m) has all the args and config file processor which can parse command line arguments or a JSON config file. The same logic is shared by `BLUEPILL_BINARY` and `BP_BINARY`.
+	- `bluepill` will create many `bp` (aka `BP_BINARY`) processes to run simulators
+	- Monitor the `bp` processes for failure
+	- Aggregates individual test results into a unified test results
+- `bp` (aka `BP_BINARY`) is designed to run one `.xctest` bundle using one simulator. It will automatically delete and create new simulators if the tests crash or fail to provide a clean slate for the tests to run. However, it will only have at any time a single simulator running. The parallelism of Bluepill is provided by the multiple `bp` processes that `bluepill` spawns.
+	- [`bp/src/main.m`](bp/src/main.m) is the entry point.
 - Bluepill is fully self contained and needs no external dependencies
 
 ## Running Bluepill
 - `bluepill --config bp/tests/Resources ... config.json`
 ![](doc/img/config.png)
-- `BPRunner.m`
-	- How many `BP_BINARY` processes at a given time?
+- [`BPRunner.m`](bluepill/src/BPRunner.m)
+	- Keeps track of how many `BP_BINARY` processes at a given time?
 	- Packing algorithm gets all XCTestBundles in Plugins directory to determine the number of parallel simulators
 	- X Tests : Y Simulators (What are some packing strategies?)
 	- Perhaps Bluepill can use previous run's stats to determine the packing algorithm and weight by Bundle size if no prior knowledge exists. The key is to parallelize equally.
